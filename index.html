@@ -1322,6 +1322,14 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
         </div>
       </div>
 
+      <div class="table-card">
+        <div class="table-head"><div class="table-title">Comisiones del equipo</div></div>
+        <table class="data-table">
+          <thead><tr><th>Miembro</th><th>Rol</th><th>Tipo</th><th>Base de cálculo</th><th style="text-align:right">Comisión</th></tr></thead>
+          <tbody id="tbody-comisiones"></tbody>
+        </table>
+      </div>
+
       <!-- ALERTAS DEL MES -->
       <div id="dash-alertas"></div>
 
@@ -2596,6 +2604,69 @@ function filaComision(m, comision, base, baseVal, mes, anio, color) {
   </tr>`;
 }
 
+// Explica en palabras cómo se calcula la comisión de un miembro (para la sección Equipo)
+function explicarComision(m, mes, anio, ctx) {
+  ctx = ctx || totalesPeriodo(mes, anio);
+  const { ingresos, totalIngresos, totalGastos, revenue } = ctx;
+  const tasaPct = m.valor;
+  if (m.tipo === 'porcentaje') {
+    return {
+      titulo: `${tasaPct}% de los ingresos totales`,
+      pasos: [
+        ['Ingresos totales del mes', fmt(totalIngresos)],
+        [`Su porcentaje`, `${tasaPct}%`],
+        ['Comisión', `${fmt(totalIngresos)} × ${tasaPct}% = ${fmt(totalIngresos*tasaPct/100)}`]
+      ]
+    };
+  } else if (m.tipo === 'revenue_pct') {
+    return {
+      titulo: `${tasaPct}% del revenue neto (ganancia después de gastos)`,
+      pasos: [
+        ['Ingresos del mes', fmt(totalIngresos)],
+        ['Gastos del mes', `− ${fmt(totalGastos)}`],
+        ['Revenue neto', fmt(revenue)],
+        ['Comisión', `${fmt(Math.max(0,revenue))} × ${tasaPct}% = ${fmt(Math.max(0,revenue)*tasaPct/100)}`]
+      ]
+    };
+  } else if (m.tipo === 'vendedor') {
+    const susVentas = ingresos.filter(r => r.vendedor === m.nombre).reduce((s,r) => s+r.monto, 0);
+    return {
+      titulo: `${tasaPct}% sobre lo cobrado de las ventas que cerró ${m.nombre}`,
+      pasos: [
+        [`Cobrado de ventas de ${m.nombre}`, fmt(susVentas)],
+        ['Su porcentaje', `${tasaPct}%`],
+        ['Comisión', `${fmt(susVentas)} × ${tasaPct}% = ${fmt(susVentas*tasaPct/100)}`]
+      ]
+    };
+  } else if (m.tipo === 'vendedor_total') {
+    const ventasLocal = CACHE.ventas || [];
+    const susTickets = ventasLocal.filter(v => v.vendedor === m.nombre && v.fecha).filter(v => {
+      const d = parseDateSafe(v.fecha);
+      return d && MESES[d.getMonth()] === mes && d.getFullYear() == anio;
+    }).reduce((s,v) => s+(v.total||0), 0);
+    return {
+      titulo: `${tasaPct}% sobre el ticket total de las ventas de ${m.nombre}`,
+      pasos: [
+        [`Ticket total de ventas de ${m.nombre}`, fmt(susTickets)],
+        ['Su porcentaje', `${tasaPct}%`],
+        ['Comisión', `${fmt(susTickets)} × ${tasaPct}% = ${fmt(susTickets*tasaPct/100)}`]
+      ]
+    };
+  } else if (m.tipo === 'fijo') {
+    return { titulo: 'Monto fijo mensual', pasos: [['Comisión fija', fmt(m.valor)]] };
+  } else if (m.tipo === 'restante') {
+    return {
+      titulo: 'Se queda con lo que sobra del revenue después de pagar a todos',
+      pasos: [
+        ['Revenue neto del mes', fmt(revenue)],
+        ['Menos comisiones del resto del equipo', '(se descuentan)'],
+        ['Le queda', 'el restante']
+      ]
+    };
+  }
+  return { titulo: '', pasos: [] };
+}
+
 // Renderiza la sección de comisiones dentro de Equipo (mes + acumulado + historial)
 function renderComisionesEquipo() {
   const cont = document.getElementById('comisiones-equipo-cont');
@@ -2662,7 +2733,39 @@ function renderComisionesEquipo() {
       </div>`;
     }).join('') : '<div style="color:var(--muted);font-size:12px;padding:8px 0">Sin pagos registrados todavía.</div>';
 
+    // Desglose de pagos por cuenta (histórico)
+    const pagosMiembro = (CACHE.pagosEquipo||[]).filter(p => p.miembroId === m.id);
+    const porCuenta = {};
+    pagosMiembro.forEach(p => {
+      const cuenta = getCuentas().find(c => c.id === p.cuentaId);
+      const nom = cuenta ? `${cuenta.emoji||'💵'} ${cuenta.nombre}` : '— sin cuenta';
+      porCuenta[nom] = (porCuenta[nom]||0) + (parseFloat(p.monto)||0);
+    });
+    const cuentasHTML = Object.keys(porCuenta).length
+      ? `<div style="margin-top:14px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px">
+          <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">💳 Pagado por cuenta (histórico)</div>
+          ${Object.entries(porCuenta).map(([nom,monto]) =>
+            `<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:12px">
+              <span style="color:var(--muted)">${nom}</span>
+              <span style="font-weight:500;color:var(--green)">${fmt(monto)}</span>
+            </div>`).join('')}
+        </div>`
+      : '';
+
     const colorRol = m.tipo === 'restante' ? 'tag-purple' : 'tag-blue';
+
+    // Explicación de cómo se calcula su comisión
+    const expl = explicarComision(m, mes, anio, ctx);
+    const explPasos = expl.pasos.map(([lbl,val]) =>
+      `<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:12px">
+        <span style="color:var(--muted)">${lbl}</span>
+        <span style="font-weight:500">${val}</span>
+      </div>`).join('');
+    const explHTML = `<div style="margin-top:14px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px">
+      <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">📐 Cómo se calcula</div>
+      <div style="font-size:13px;margin-bottom:8px">${expl.titulo}</div>
+      ${explPasos}
+    </div>`;
     const btnPago = (mes && anio)
       ? `<button class="btn-mini" onclick="abrirPagoEquipo('${m.id}','${(m.nombre||'').replace(/'/g,"\\'")}','${mes}','${anio}',${comisionMes.toFixed(2)})">+ Registrar pago</button>`
       : `<span style="color:var(--muted);font-size:11px">Elegí un mes para pagar</span>`;
@@ -2698,6 +2801,10 @@ function renderComisionesEquipo() {
           <div style="font-size:17px;font-weight:600;color:var(--green)">${fmt(totalPagadoHist)}</div>
         </div>
       </div>
+
+      ${explHTML}
+
+      ${cuentasHTML}
 
       <div style="margin-top:14px">
         <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Historial de pagos</div>
@@ -2931,7 +3038,23 @@ function renderDashboardFromCache() {
   updateMetricChange('change-revenue', revenue, prevMonthRevenue);
   updateMetricChange('change-roi', roas || 0, prevMonthRoas);
 
-  // Las comisiones del equipo ahora viven en la sección Equipo (renderComisionesEquipo)
+  // Tabla resumida de comisiones del equipo (el detalle ampliado está en la sección Equipo)
+  const tbody = document.getElementById('tbody-comisiones');
+  if (tbody) {
+    const activos = CACHE.equipo.filter(m => m.activo);
+    const ctxC = { ingresos, totalIngresos, revenue };
+    let distribuido = 0;
+    const rows = activos.filter(m => m.tipo !== 'restante').map(m => {
+      const r = calcComisionMiembro(m, mes, anio, ctxC);
+      distribuido += r.comision;
+      return `<tr><td><strong>${m.nombre}</strong></td><td><span class="tag tag-blue">${m.rol}</span></td><td>${r.base}</td><td style="color:var(--muted)">${r.baseVal}</td><td style="text-align:right"><strong style="color:var(--gold)">${fmt(r.comision)}</strong></td></tr>`;
+    });
+    activos.filter(m => m.tipo === 'restante').forEach(m => {
+      const restante = Math.max(0, revenue - distribuido);
+      rows.push(`<tr><td><strong>${m.nombre}</strong></td><td><span class="tag tag-purple">${m.rol}</span></td><td>Restante del revenue</td><td style="color:var(--muted)">${fmt(revenue)} - comisiones</td><td style="text-align:right"><strong style="color:var(--purple)">${fmt(restante)}</strong></td></tr>`);
+    });
+    tbody.innerHTML = rows.length ? rows.join('') : '<tr><td colspan="5"><div class="empty">Sin equipo configurado</div></td></tr>';
+  }
 
   const porCat = {};
   gastos.forEach(g => { porCat[g.categoria] = (porCat[g.categoria]||0) + g.monto; });
