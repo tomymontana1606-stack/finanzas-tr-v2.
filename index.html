@@ -2526,13 +2526,31 @@ function mismoMesAnio(date, mes, anio) {
 // ============================================================
 // PAGOS DEL EQUIPO (reparto de comisiones)
 // ============================================================
-// Calcula ingresos/gastos/revenue de un período (mes/anio)
+// Calcula el gasto de suscripciones de un período (igual criterio que el dashboard)
+function calcGastoSubs(mes, anio) {
+  const MESES_ABR = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+  const mesActualKey = MESES_ABR[new Date().getMonth()];
+  const anioActual = new Date().getFullYear();
+  const esMesActual = !mes || (mes === mesActualKey && String(anio) === String(anioActual));
+  if (!esMesActual || !CACHE.subs || !CACHE.subs.length) return 0;
+  return CACHE.subs.reduce((s, sub) => {
+    const costo = parseFloat(sub.costo) || 0;
+    const ciclo = (sub.ciclo || '').toLowerCase().trim();
+    if (costo === 0 || sub.plan === 'gratuito' || ciclo === 'gratis') return s;
+    if (ciclo === 'anual' || ciclo === 'annual') return s + costo/12;
+    return s + costo;
+  }, 0);
+}
+
+// Calcula ingresos/gastos/revenue de un período (mes/anio) — mismo criterio que el dashboard
 function totalesPeriodo(mes, anio) {
   const ing = (CACHE.ingresos||[]).filter(r => !mes || (r.mes === mes && String(r.anio) === String(anio)));
   const gas = (CACHE.gastos||[]).filter(r => !mes || (r.mes === mes && String(r.anio) === String(anio)));
   const totalIngresos = ing.reduce((s,r) => s + (r.monto||0), 0);
-  const totalGastos = gas.reduce((s,r) => s + (r.monto||0), 0);
-  return { ingresos: ing, totalIngresos, totalGastos, revenue: totalIngresos - totalGastos };
+  const gastosDirectos = gas.reduce((s,r) => s + (r.monto||0), 0);
+  const gastoSubs = calcGastoSubs(mes, anio);
+  const totalGastos = gastosDirectos + gastoSubs;
+  return { ingresos: ing, totalIngresos, totalGastos, gastosDirectos, gastoSubs, revenue: totalIngresos - totalGastos };
 }
 
 // Calcula la comisión de UN miembro para un período. Devuelve {comision, base, baseVal}
@@ -2619,14 +2637,18 @@ function explicarComision(m, mes, anio, ctx) {
       ]
     };
   } else if (m.tipo === 'revenue_pct') {
+    const pasos = [['Ingresos del mes', fmt(totalIngresos)]];
+    if (ctx.gastoSubs > 0) {
+      pasos.push(['Gastos del mes', `− ${fmt(ctx.gastosDirectos)}`]);
+      pasos.push(['Suscripciones del mes', `− ${fmt(ctx.gastoSubs)}`]);
+    } else {
+      pasos.push(['Gastos del mes', `− ${fmt(totalGastos)}`]);
+    }
+    pasos.push(['Revenue neto', fmt(revenue)]);
+    pasos.push(['Comisión', `${fmt(Math.max(0,revenue))} × ${tasaPct}% = ${fmt(Math.max(0,revenue)*tasaPct/100)}`]);
     return {
       titulo: `${tasaPct}% del revenue neto (ganancia después de gastos)`,
-      pasos: [
-        ['Ingresos del mes', fmt(totalIngresos)],
-        ['Gastos del mes', `− ${fmt(totalGastos)}`],
-        ['Revenue neto', fmt(revenue)],
-        ['Comisión', `${fmt(Math.max(0,revenue))} × ${tasaPct}% = ${fmt(Math.max(0,revenue)*tasaPct/100)}`]
-      ]
+      pasos
     };
   } else if (m.tipo === 'vendedor') {
     const susVentas = ingresos.filter(r => r.vendedor === m.nombre).reduce((s,r) => s+r.monto, 0);
@@ -2973,26 +2995,8 @@ function renderDashboardFromCache() {
   const totalIngresos = ingresos.reduce((s,r) => s + r.monto, 0);
   const gastosDirectos = gastos.reduce((s,r) => s + r.monto, 0);
 
-  // Sumar suscripciones activas al total de gastos del mes
-  const MESES_ABR = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
-  const mesActualNum = new Date().getMonth();
-  const mesActualKey = MESES_ABR[mesActualNum];
-  const anioActual = new Date().getFullYear();
-  
-  // Solo sumar subs si el período seleccionado es el mes actual o no hay filtro de días
-  const esMesActual = !mes || (mes === mesActualKey && String(anio) === String(anioActual));
-  
-  let gastoSubs = 0;
-  if(esMesActual && CACHE.subs && CACHE.subs.length > 0) {
-    gastoSubs = CACHE.subs.reduce((s, sub) => {
-      const costo = parseFloat(sub.costo) || 0;
-      const ciclo = (sub.ciclo || '').toLowerCase().trim();
-      // Solo contar subs con costo > 0 (no gratuitas)
-      if(costo === 0 || sub.plan === 'gratuito' || ciclo === 'gratis') return s;
-      if(ciclo === 'anual' || ciclo === 'annual') return s + costo/12;
-      return s + costo; // mensual, pay/uso, etc
-    }, 0);
-  }
+  // Sumar suscripciones al total de gastos (mismo criterio que totalesPeriodo)
+  const gastoSubs = calcGastoSubs(mes, anio);
 
   const totalGastos = gastosDirectos + gastoSubs;
   const revenue       = totalIngresos - totalGastos;
