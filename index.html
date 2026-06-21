@@ -1321,13 +1321,6 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
           </div>
         </div>
       </div>
-      <div class="table-card">
-        <div class="table-head"><div class="table-title">Comisiones del equipo</div></div>
-        <table class="data-table">
-          <thead><tr><th>Miembro</th><th>Rol</th><th>Base de cálculo</th><th style="text-align:right">Le toca</th><th style="text-align:right">Pagado</th><th style="text-align:right">Restante</th><th style="text-align:right">Acción</th></tr></thead>
-          <tbody id="tbody-comisiones"></tbody>
-        </table>
-      </div>
 
       <!-- ALERTAS DEL MES -->
       <div id="dash-alertas"></div>
@@ -1435,6 +1428,18 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
         <button class="btn-add" onclick="openModal('miembro')">+ Agregar miembro</button>
       </div>
       <div class="equipo-grid" id="equipo-grid"></div>
+
+      <!-- COMISIONES DEL EQUIPO -->
+      <div class="table-card" style="margin-top:24px">
+        <div class="table-head" style="align-items:center">
+          <div>
+            <div class="table-title">Comisiones y pagos</div>
+            <div style="font-size:12px;color:var(--muted);margin-top:4px">Resumen del mes + acumulado histórico de cada miembro</div>
+          </div>
+          <select class="period-select" id="comis-period" onchange="renderComisionesEquipo()" style="min-width:150px"></select>
+        </div>
+        <div id="comisiones-equipo-cont"></div>
+      </div>
     </section>
 
     <!-- CONFIGURACIONES -->
@@ -2513,6 +2518,47 @@ function mismoMesAnio(date, mes, anio) {
 // ============================================================
 // PAGOS DEL EQUIPO (reparto de comisiones)
 // ============================================================
+// Calcula ingresos/gastos/revenue de un período (mes/anio)
+function totalesPeriodo(mes, anio) {
+  const ing = (CACHE.ingresos||[]).filter(r => !mes || (r.mes === mes && String(r.anio) === String(anio)));
+  const gas = (CACHE.gastos||[]).filter(r => !mes || (r.mes === mes && String(r.anio) === String(anio)));
+  const totalIngresos = ing.reduce((s,r) => s + (r.monto||0), 0);
+  const totalGastos = gas.reduce((s,r) => s + (r.monto||0), 0);
+  return { ingresos: ing, totalIngresos, totalGastos, revenue: totalIngresos - totalGastos };
+}
+
+// Calcula la comisión de UN miembro para un período. Devuelve {comision, base, baseVal}
+function calcComisionMiembro(m, mes, anio, ctx) {
+  ctx = ctx || totalesPeriodo(mes, anio);
+  const { ingresos, totalIngresos, revenue } = ctx;
+  let comision = 0, base = '', baseVal = '';
+  if (m.tipo === 'porcentaje') {
+    comision = totalIngresos * (m.valor/100);
+    base = `${m.valor}% de ingresos totales`; baseVal = fmt(totalIngresos);
+  } else if (m.tipo === 'revenue_pct') {
+    comision = Math.max(0, revenue) * (m.valor/100);
+    base = `${m.valor}% del revenue neto`; baseVal = fmt(Math.max(0, revenue));
+  } else if (m.tipo === 'vendedor') {
+    const susVentas = ingresos.filter(r => r.vendedor === m.nombre).reduce((s,r) => s+r.monto, 0);
+    comision = susVentas * (m.valor/100);
+    base = `${m.valor}% sobre lo cobrado de sus ventas`; baseVal = fmt(susVentas);
+  } else if (m.tipo === 'vendedor_total') {
+    const ventasLocal = CACHE.ventas || JSON.parse(localStorage.getItem('dash_ventas') || '[]');
+    const susTickets = ventasLocal.filter(v => v.vendedor === m.nombre && v.fecha).filter(v => {
+      const d = parseDateSafe(v.fecha);
+      return d && MESES[d.getMonth()] === mes && d.getFullYear() == anio;
+    }).reduce((s,v) => s+(v.total||0), 0);
+    comision = susTickets * (m.valor/100);
+    base = `${m.valor}% sobre ticket total de sus ventas`; baseVal = fmt(susTickets);
+  } else if (m.tipo === 'fijo') {
+    comision = m.valor; base = 'Monto fijo'; baseVal = '—';
+  } else if (m.tipo === 'restante') {
+    // El restante se calcula afuera (necesita saber lo distribuido)
+    base = 'Restante del revenue'; baseVal = '';
+  }
+  return { comision, base, baseVal };
+}
+
 // Suma lo ya pagado a un miembro en un período (mes/anio)
 function pagadoMiembro(miembroId, mes, anio) {
   return (CACHE.pagosEquipo || [])
@@ -2548,6 +2594,142 @@ function filaComision(m, comision, base, baseVal, mes, anio, color) {
     <td style="text-align:right"><strong>${restanteTxt}</strong></td>
     <td style="text-align:right">${accion}</td>
   </tr>`;
+}
+
+// Renderiza la sección de comisiones dentro de Equipo (mes + acumulado + historial)
+function renderComisionesEquipo() {
+  const cont = document.getElementById('comisiones-equipo-cont');
+  if (!cont) return;
+  // Período elegido en el selector propio de la sección
+  const sel = document.getElementById('comis-period');
+  let mes = '', anio = '';
+  if (sel && sel.value) {
+    const parts = sel.value.split('|');
+    mes = parts[0]; anio = parts[1];
+  }
+
+  const activos = (CACHE.equipo || []).filter(m => m.activo);
+  if (!activos.length) {
+    cont.innerHTML = '<div class="empty">Sin equipo configurado</div>';
+    return;
+  }
+
+  // Calcular comisión del mes para cada miembro (con restante)
+  const ctx = totalesPeriodo(mes, anio);
+  let distribuido = 0;
+  const calc = {};
+  activos.filter(m => m.tipo !== 'restante').forEach(m => {
+    const r = calcComisionMiembro(m, mes, anio, ctx);
+    calc[m.id] = r;
+    distribuido += r.comision;
+  });
+  activos.filter(m => m.tipo === 'restante').forEach(m => {
+    calc[m.id] = { comision: Math.max(0, ctx.revenue - distribuido), base:'Restante del revenue', baseVal:`${fmt(ctx.revenue)} - comisiones` };
+  });
+
+  // Lista de meses con datos (para acumulado histórico)
+  const periodos = mesesConDatos();
+
+  const cards = activos.map(m => {
+    const c = calc[m.id] || { comision:0, base:'', baseVal:'' };
+    const comisionMes = c.comision;
+    const pagadoMes = pagadoMiembro(m.id, mes, anio);
+    const restanteMes = Math.max(0, comisionMes - pagadoMes);
+
+    // Acumulado histórico: sumar comisión de todos los meses con datos + todo lo pagado histórico
+    let totalGanadoHist = 0;
+    periodos.forEach(p => {
+      const ct = totalesPeriodo(p.mes, p.anio);
+      let dist = 0;
+      activos.filter(x => x.tipo !== 'restante').forEach(x => { dist += calcComisionMiembro(x, p.mes, p.anio, ct).comision; });
+      if (m.tipo === 'restante') totalGanadoHist += Math.max(0, ct.revenue - dist);
+      else totalGanadoHist += calcComisionMiembro(m, p.mes, p.anio, ct).comision;
+    });
+    const totalPagadoHist = (CACHE.pagosEquipo||[]).filter(p => p.miembroId === m.id).reduce((s,p)=>s+(parseFloat(p.monto)||0),0);
+
+    // Historial de pagos de este miembro (todos los meses)
+    const pagos = (CACHE.pagosEquipo||[]).filter(p => p.miembroId === m.id)
+      .sort((a,b)=> String(b.fecha).localeCompare(String(a.fecha)));
+    const histHTML = pagos.length ? pagos.map(p => {
+      const cuenta = getCuentas().find(c => c.id === p.cuentaId);
+      const cuentaNom = cuenta ? `${cuenta.emoji||''} ${cuenta.nombre}` : '—';
+      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid var(--border)">
+        <div>
+          <div style="font-size:13px"><strong>${fmt(p.monto)}</strong> <span style="color:var(--muted);font-size:11px">· ${p.mes} ${p.anio}</span></div>
+          <div style="font-size:11px;color:var(--muted)">${fmtFecha(p.fecha)} · ${cuentaNom}${p.nota ? ' · ' + p.nota : ''}</div>
+        </div>
+        <button class="btn-mini btn-mini-ghost" onclick="eliminarPagoEquipo('${p.id}')" title="Eliminar">✕</button>
+      </div>`;
+    }).join('') : '<div style="color:var(--muted);font-size:12px;padding:8px 0">Sin pagos registrados todavía.</div>';
+
+    const colorRol = m.tipo === 'restante' ? 'tag-purple' : 'tag-blue';
+    const btnPago = (mes && anio)
+      ? `<button class="btn-mini" onclick="abrirPagoEquipo('${m.id}','${(m.nombre||'').replace(/'/g,"\\'")}','${mes}','${anio}',${comisionMes.toFixed(2)})">+ Registrar pago</button>`
+      : `<span style="color:var(--muted);font-size:11px">Elegí un mes para pagar</span>`;
+
+    return `<div class="table-card" style="margin-bottom:14px;background:var(--card2)">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px">
+        <div>
+          <div style="font-size:16px;font-weight:600">${m.nombre} <span class="tag ${colorRol}" style="margin-left:6px">${m.rol}</span></div>
+          <div style="font-size:12px;color:var(--muted);margin-top:2px">${c.base}${c.baseVal?` · ${c.baseVal}`:''}</div>
+        </div>
+        ${btnPago}
+      </div>
+
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px;margin-top:14px">
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px">
+          <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Le toca ${mes||'(mes)'}</div>
+          <div style="font-size:17px;font-weight:600;color:var(--gold)">${fmt(comisionMes)}</div>
+        </div>
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px">
+          <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Pagado ${mes||''}</div>
+          <div style="font-size:17px;font-weight:600;color:var(--green)">${fmt(pagadoMes)}</div>
+        </div>
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px">
+          <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Restante ${mes||''}</div>
+          <div style="font-size:17px;font-weight:600;color:${restanteMes>0.01?'var(--gold)':'var(--green)'}">${restanteMes>0.01?fmt(restanteMes):'✓'}</div>
+        </div>
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px">
+          <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Ganado histórico</div>
+          <div style="font-size:17px;font-weight:600">${fmt(totalGanadoHist)}</div>
+        </div>
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px">
+          <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Cobrado histórico</div>
+          <div style="font-size:17px;font-weight:600;color:var(--green)">${fmt(totalPagadoHist)}</div>
+        </div>
+      </div>
+
+      <div style="margin-top:14px">
+        <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px">Historial de pagos</div>
+        ${histHTML}
+      </div>
+    </div>`;
+  });
+
+  cont.innerHTML = cards.join('');
+}
+
+// Devuelve lista de períodos {mes,anio} que tienen ingresos o gastos
+function mesesConDatos() {
+  const set = {};
+  (CACHE.ingresos||[]).concat(CACHE.gastos||[]).forEach(r => {
+    if (r.mes && r.anio) set[`${r.mes}|${r.anio}`] = { mes:r.mes, anio:r.anio };
+  });
+  return Object.values(set);
+}
+
+// Llena el selector de período de la sección comisiones
+function initComisPeriodSelector() {
+  const sel = document.getElementById('comis-period');
+  if (!sel) return;
+  const periodos = mesesConDatos();
+  // Ordenar por fecha desc
+  periodos.sort((a,b) => {
+    const ia = MESES.indexOf(a.mes), ib = MESES.indexOf(b.mes);
+    return (b.anio - a.anio) || (ib - ia);
+  });
+  const actual = SELECTED_PERIOD && SELECTED_PERIOD.mes ? `${SELECTED_PERIOD.mes}|${SELECTED_PERIOD.anio}` : (periodos[0] ? `${periodos[0].mes}|${periodos[0].anio}` : '');
+  sel.innerHTML = periodos.map(p => `<option value="${p.mes}|${p.anio}" ${(`${p.mes}|${p.anio}`===actual)?'selected':''}>${p.mes} ${p.anio}</option>`).join('');
 }
 
 // Abre el modal de pago para un miembro
@@ -2637,6 +2819,7 @@ async function guardarPagoEquipo() {
 
   showToast(`Pago a ${nombre} registrado ✓`,'ok');
   closeModal('pago-equipo');
+  renderComisionesEquipo();
   renderDashboardFromCache();
   renderTesoreria();
 }
@@ -2657,6 +2840,7 @@ async function eliminarPagoEquipo(pagoId) {
   showToast('Pago eliminado','ok');
   // Refrescar modal si sigue abierto
   renderPagosPrevios(pago.miembroId, pago.mes, pago.anio);
+  renderComisionesEquipo();
   renderDashboardFromCache();
   renderTesoreria();
 }
@@ -2747,51 +2931,7 @@ function renderDashboardFromCache() {
   updateMetricChange('change-revenue', revenue, prevMonthRevenue);
   updateMetricChange('change-roi', roas || 0, prevMonthRoas);
 
-  // Comisiones con lógica avanzada
-  const tbody = document.getElementById('tbody-comisiones');
-  const activos = CACHE.equipo.filter(m => m.activo);
-  let distribuido = 0;
-
-  const rows = activos.filter(m => m.tipo !== 'restante').map(m => {
-    let comision = 0, base = '', baseVal = '';
-    if (m.tipo === 'porcentaje') {
-      comision = totalIngresos * (m.valor/100);
-      base = `${m.valor}% de ingresos totales`;
-      baseVal = fmt(totalIngresos);
-    } else if (m.tipo === 'revenue_pct') {
-      comision = Math.max(0, revenue) * (m.valor/100);
-      base = `${m.valor}% del revenue neto`;
-      baseVal = fmt(Math.max(0, revenue));
-    } else if (m.tipo === 'vendedor') {
-      const susVentas = ingresos.filter(r => r.vendedor === m.nombre).reduce((s,r) => s+r.monto, 0);
-      comision = susVentas * (m.valor/100);
-      base = `${m.valor}% sobre lo cobrado de sus ventas`;
-      baseVal = fmt(susVentas);
-    } else if (m.tipo === 'vendedor_total') {
-      const ventasLocal = JSON.parse(localStorage.getItem('dash_ventas') || '[]');
-      const susTickets = ventasLocal.filter(v => v.vendedor === m.nombre && v.fecha).filter(v => {
-        const d = parseDateSafe(v.fecha);
-        return d && MESES[d.getMonth()] === mes && d.getFullYear() == anio;
-      }).reduce((s,v) => s+(v.total||0), 0);
-      comision = susTickets * (m.valor/100);
-      base = `${m.valor}% sobre ticket total de sus ventas`;
-      baseVal = fmt(susTickets);
-    } else if (m.tipo === 'fijo') {
-      comision = m.valor;
-      base = 'Monto fijo';
-      baseVal = '—';
-    }
-    distribuido += comision;
-    return filaComision(m, comision, base, baseVal, mes, anio, 'gold');
-  });
-
-  const socios = activos.filter(m => m.tipo === 'restante');
-  socios.forEach(m => {
-    const restante = Math.max(0, revenue - distribuido);
-    rows.push(filaComision(m, restante, 'Restante del revenue', `${fmt(revenue)} - comisiones`, mes, anio, 'purple'));
-  });
-
-  tbody.innerHTML = rows.length ? rows.join('') : '<tr><td colspan="5"><div class="empty">Sin equipo configurado</div></td></tr>';
+  // Las comisiones del equipo ahora viven en la sección Equipo (renderComisionesEquipo)
 
   const porCat = {};
   gastos.forEach(g => { porCat[g.categoria] = (porCat[g.categoria]||0) + g.monto; });
@@ -4254,6 +4394,10 @@ function renderEquipo() {
       <div class="miembro-tipo">${subLabel}</div>
     </div>`;
   }).join('');
+
+  // Renderizar también la sección de comisiones del equipo
+  initComisPeriodSelector();
+  renderComisionesEquipo();
 }
 
 async function saveMiembro() {
