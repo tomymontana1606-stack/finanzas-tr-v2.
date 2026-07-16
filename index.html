@@ -2634,7 +2634,7 @@ function calcComisionMiembro(m, mes, anio, ctx) {
 // Suma lo ya pagado a un miembro en un período (mes/anio)
 function pagadoMiembro(miembroId, mes, anio) {
   return (CACHE.pagosEquipo || [])
-    .filter(p => p.miembroId === miembroId && p.mes === mes && String(p.anio) === String(anio))
+    .filter(p => String(p.miembroId) === String(miembroId) && p.mes === mes && String(p.anio) === String(anio))
     .reduce((s,p) => s + (parseFloat(p.monto)||0), 0);
 }
 
@@ -2785,10 +2785,10 @@ function renderComisionesEquipo() {
       if (m.tipo === 'restante') totalGanadoHist += Math.max(0, ct.revenue - dist) + (calcComisionMiembro(m, p.mes, p.anio, ct).comSetter||0);
       else totalGanadoHist += calcComisionMiembro(m, p.mes, p.anio, ct).comision;
     });
-    const totalPagadoHist = (CACHE.pagosEquipo||[]).filter(p => p.miembroId === m.id).reduce((s,p)=>s+(parseFloat(p.monto)||0),0);
+    const totalPagadoHist = (CACHE.pagosEquipo||[]).filter(p => String(p.miembroId) === String(m.id)).reduce((s,p)=>s+(parseFloat(p.monto)||0),0);
 
     // Historial de pagos de este miembro (todos los meses)
-    const pagos = (CACHE.pagosEquipo||[]).filter(p => p.miembroId === m.id)
+    const pagos = (CACHE.pagosEquipo||[]).filter(p => String(p.miembroId) === String(m.id))
       .sort((a,b)=> String(b.fecha).localeCompare(String(a.fecha)));
     const histHTML = pagos.length ? pagos.map(p => {
       const cuenta = getCuentas().find(c => c.id === p.cuentaId);
@@ -2803,7 +2803,7 @@ function renderComisionesEquipo() {
     }).join('') : '<div style="color:var(--muted);font-size:12px;padding:8px 0">Sin pagos registrados todavía.</div>';
 
     // Desglose de pagos por cuenta (histórico)
-    const pagosMiembro = (CACHE.pagosEquipo||[]).filter(p => p.miembroId === m.id);
+    const pagosMiembro = (CACHE.pagosEquipo||[]).filter(p => String(p.miembroId) === String(m.id));
     const porCuenta = {};
     pagosMiembro.forEach(p => {
       const cuenta = getCuentas().find(c => c.id === p.cuentaId);
@@ -2939,7 +2939,7 @@ function abrirPagoEquipo(miembroId, nombre, mes, anio, comision) {
 // Muestra los pagos parciales ya registrados de ese miembro/período
 function renderPagosPrevios(miembroId, mes, anio) {
   const pagos = (CACHE.pagosEquipo || [])
-    .filter(p => p.miembroId === miembroId && p.mes === mes && String(p.anio) === String(anio));
+    .filter(p => String(p.miembroId) === String(miembroId) && p.mes === mes && String(p.anio) === String(anio));
   const cont = document.getElementById('pe-pagos-previos');
   if (!pagos.length) {
     cont.innerHTML = '<div style="color:var(--muted);font-size:12px;padding:8px 0">Todavía no hay pagos registrados.</div>';
@@ -3907,10 +3907,12 @@ async function deleteIngreso(id) {
   if (!confirm('¿Eliminar este ingreso?')) return;
   const res = await api({ action:'deleteIngreso', id });
   if (res.ok) {
-    CACHE.ingresos = CACHE.ingresos.filter(r => r.id !== id);
+    CACHE.ingresos = CACHE.ingresos.filter(r => String(r.id) !== String(id));
     showToast('Eliminado','ok');
     renderIngresosFromCache();
     renderDashboardFromCache();
+  } else {
+    showToast(res.error === 'not_found' ? 'No se encontró en el Sheet (id: '+id+')' : 'No se pudo eliminar','err');
   }
 }
 
@@ -4015,10 +4017,12 @@ async function deleteGasto(id) {
   if (!confirm('¿Eliminar este gasto?')) return;
   const res = await api({ action:'deleteGasto', id });
   if (res.ok) {
-    CACHE.gastos = CACHE.gastos.filter(r => r.id !== id);
+    CACHE.gastos = CACHE.gastos.filter(r => String(r.id) !== String(id));
     showToast('Eliminado','ok');
     renderGastosFromCache();
     renderDashboardFromCache();
+  } else {
+    showToast(res.error === 'not_found' ? 'No se encontró en el Sheet (id: '+id+')' : 'No se pudo eliminar','err');
   }
 }
 
@@ -4621,7 +4625,8 @@ async function saveMiembro() {
 }
 
 function editMiembro(id) {
-  const m = CACHE.equipo.find(x => x.id === id);
+  // Comparar como texto: el Sheet puede devolver ids numéricos y el onclick los pasa como string.
+  const m = CACHE.equipo.find(x => String(x.id) === String(id));
   if (!m) return;
   document.getElementById('em-id').value    = m.id;
   document.getElementById('em-nombre').value= m.nombre;
@@ -4644,7 +4649,7 @@ async function updateMiembro() {
   try {
     const res = await api({ action:'updateMiembro', id, nombre, rol, tipo, valor, setterPct, activo:true });
     if (res.ok) {
-      const idx = CACHE.equipo.findIndex(x => x.id === id);
+      const idx = CACHE.equipo.findIndex(x => String(x.id) === String(id));
       if (idx >= 0) CACHE.equipo[idx] = { ...CACHE.equipo[idx], nombre, rol, tipo, valor, setterPct };
       showToast('Actualizado ✓','ok');
       closeModal('edit-miembro');
@@ -4659,10 +4664,12 @@ async function deleteMiembro(id) {
   if (!confirm('¿Eliminar este miembro?')) return;
   const res = await api({ action:'deleteMiembro', id });
   if (res.ok) {
-    CACHE.equipo = CACHE.equipo.filter(m => m.id !== id);
+    CACHE.equipo = CACHE.equipo.filter(m => String(m.id) !== String(id));
     showToast('Eliminado','ok');
     renderEquipo();
     fillVendedorSelects();
+  } else {
+    showToast(res.error === 'not_found' ? 'No se encontró en el Sheet (id: '+id+')' : 'No se pudo eliminar','err');
   }
 }
 
