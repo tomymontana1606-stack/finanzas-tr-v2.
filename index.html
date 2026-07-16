@@ -4557,11 +4557,12 @@ function toggleTipoMiembro(prefix='mie') {
   const hints  = {
     porcentaje:  'Se calcula sobre el total de ingresos brutos',
     revenue_pct: 'Se calcula sobre el revenue neto (ingresos − gastos)',
-    vendedor:    'Se calcula solo sobre los ingresos donde este miembro aparece como vendedor',
+    vendedor:    'Sobre lo cobrado de las ventas que CIERRA. Si solo setea, poné 0 y usá "% como setter" abajo.',
+    vendedor_total: 'Sobre el ticket total de las ventas que CIERRA. Si solo setea, poné 0.',
     fijo:        'Monto fijo independiente de los ingresos',
     restante:    'Se lleva lo que queda del revenue después de pagar al resto del equipo'
   };
-  const labels = { porcentaje:'Porcentaje (%)', revenue_pct:'% del revenue neto', vendedor:'% sobre lo cobrado (%)', vendedor_total:'% sobre ticket total (%)', fijo:'Monto fijo ($)', restante:'—' };
+  const labels = { porcentaje:'Porcentaje (%)', revenue_pct:'% del revenue neto', vendedor:'% como vendedor / closer (%)', vendedor_total:'% como vendedor sobre ticket total (%)', fijo:'Monto fijo ($)', restante:'—' };
   wrap.style.display = tipo === 'restante' ? 'none' : 'block';
   if (label) label.textContent = labels[tipo] || '%';
   if (hint)  hint.textContent  = hints[tipo]  || '';
@@ -4606,10 +4607,11 @@ async function saveMiembro() {
   const nombre = document.getElementById('mie-nombre').value.trim();
   const rol    = document.getElementById('mie-rol').value.trim();
   const tipo   = document.getElementById('mie-tipo').value;
-  const valor  = tipo === 'restante' ? 0 : parseFloat(document.getElementById('mie-valor').value);
+  const valor  = tipo === 'restante' ? 0 : (parseFloat(document.getElementById('mie-valor').value) || 0);
   const setterPct = parseFloat(document.getElementById('mie-setter-pct').value) || 0;
   if (!nombre) { showToast('Completá el nombre','err'); return; }
-  if (tipo !== 'restante' && !valor) { showToast('Completá el valor','err'); return; }
+  // Un setter puro puede tener 0 como vendedor: sólo exigimos valor si tampoco setea.
+  if (tipo !== 'restante' && !valor && !setterPct) { showToast('Completá el valor (o el % como setter)','err'); return; }
   try {
     const res = await api({ action:'addMiembro', nombre, rol, tipo, valor, setterPct, activo:true });
     if (res.ok) {
@@ -4643,9 +4645,11 @@ async function updateMiembro() {
   const nombre = document.getElementById('em-nombre').value.trim();
   const rol    = document.getElementById('em-rol').value.trim();
   const tipo   = document.getElementById('em-tipo').value;
-  const valor  = tipo === 'restante' ? 0 : parseFloat(document.getElementById('em-valor').value);
+  const valor  = tipo === 'restante' ? 0 : (parseFloat(document.getElementById('em-valor').value) || 0);
   const setterPct = parseFloat(document.getElementById('em-setter-pct').value) || 0;
   if (!nombre) { showToast('Completá el nombre','err'); return; }
+  // Un setter puro puede tener 0 como vendedor: sólo exigimos valor si tampoco setea.
+  if (tipo !== 'restante' && !valor && !setterPct) { showToast('Completá el valor (o el % como setter)','err'); return; }
   try {
     const res = await api({ action:'updateMiembro', id, nombre, rol, tipo, valor, setterPct, activo:true });
     if (res.ok) {
