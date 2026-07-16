@@ -1601,13 +1601,21 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
     </div>
     <div class="form-row">
       <div class="form-group">
-        <label class="form-label">Vendedor</label>
+        <label class="form-label">Vendedor <span style="color:var(--muted);font-weight:400">(closer)</span></label>
         <select class="form-select" id="v-vendedor"><option value="">— Sin vendedor —</option></select>
       </div>
+      <div class="form-group">
+        <label class="form-label">Setter</label>
+        <select class="form-select" id="v-setter"><option value="">— No aplica —</option></select>
+        <div class="form-hint">Quien agendó/preparó al cliente. Si el vendedor también seteó, dejá "No aplica".</div>
+      </div>
+    </div>
+    <div class="form-row">
       <div class="form-group">
         <label class="form-label">Servicio / Producto</label>
         <input class="form-input" id="v-producto" placeholder="Ej: Membresía anual" />
       </div>
+      <div class="form-group"></div>
     </div>
     <div class="divider-label">💰 Estructura de pago</div>
     <div class="form-row">
@@ -1687,8 +1695,12 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
         <div class="form-group"><label class="form-label">Fecha de venta</label><input class="form-input" type="date" id="ei-fecha" /></div>
       </div>
       <div class="form-row">
-        <div class="form-group"><label class="form-label">Vendedor</label><select class="form-select" id="ei-vendedor"><option value="">— Sin vendedor —</option></select></div>
+        <div class="form-group"><label class="form-label">Vendedor <span style="color:var(--muted);font-weight:400">(closer)</span></label><select class="form-select" id="ei-vendedor"><option value="">— Sin vendedor —</option></select></div>
+        <div class="form-group"><label class="form-label">Setter</label><select class="form-select" id="ei-setter"><option value="">— No aplica —</option></select></div>
+      </div>
+      <div class="form-row">
         <div class="form-group"><label class="form-label">Servicio / Producto</label><input class="form-input" id="ei-producto" placeholder="Ej: Membresía anual" /></div>
+        <div class="form-group"></div>
       </div>
     </div>
 
@@ -1971,6 +1983,11 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
       <input class="form-input" type="number" id="mie-valor" placeholder="0" min="0" step="0.01" />
       <div class="form-hint" id="mie-hint"></div>
     </div>
+    <div class="form-group">
+      <label class="form-label">% como setter <span style="color:var(--muted);font-weight:400">(opcional)</span></label>
+      <input class="form-input" type="number" id="mie-setter-pct" placeholder="0" min="0" step="0.01" />
+      <div class="form-hint">% sobre lo cobrado (seña + cuotas) de las ventas donde figure como setter. Dejalo en 0 si no setea.</div>
+    </div>
     <div class="modal-actions">
       <button class="btn-cancel" onclick="closeModal('miembro')">Cancelar</button>
       <button class="btn-save" onclick="guardarConBloqueo(this, saveMiembro, 'Guardando miembro...')">Guardar</button>
@@ -2002,6 +2019,11 @@ body { background:var(--bg); color:var(--text); font-family:var(--font); font-si
       <label class="form-label" id="em-val-label">Porcentaje (%)</label>
       <input class="form-input" type="number" id="em-valor" min="0" step="0.01" />
       <div class="form-hint" id="em-hint"></div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">% como setter <span style="color:var(--muted);font-weight:400">(opcional)</span></label>
+      <input class="form-input" type="number" id="em-setter-pct" min="0" step="0.01" />
+      <div class="form-hint">% sobre lo cobrado (seña + cuotas) de las ventas donde figure como setter. Dejalo en 0 si no setea.</div>
     </div>
     <div class="modal-actions">
       <button class="btn-cancel" onclick="closeModal('edit-miembro')">Cancelar</button>
@@ -2239,6 +2261,14 @@ function fillVendedorSelects() {
   ['is-vendedor','v-vendedor','ei-vendedor'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.innerHTML = opts;
+  });
+  // Setter selects: por defecto "No aplica". Sólo miembros con % de setter configurado.
+  const setters = vendedores.filter(m => Number(m.setterPct) > 0);
+  const setterOpts = '<option value="">— No aplica —</option>' +
+    setters.map(m => `<option value="${m.nombre}">${m.nombre}</option>`).join('');
+  ['v-setter','ei-setter'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = setterOpts;
   });
 }
 
@@ -2582,7 +2612,23 @@ function calcComisionMiembro(m, mes, anio, ctx) {
     // El restante se calcula afuera (necesita saber lo distribuido)
     base = 'Restante del revenue'; baseVal = '';
   }
-  return { comision, base, baseVal };
+
+  // === Comisión como SETTER (independiente del tipo principal) ===
+  // % sobre lo cobrado (seña + cuotas) de las ventas donde figura como setter.
+  const setterPct = Number(m.setterPct) || 0;
+  let comSetter = 0, cobradoComoSetter = 0;
+  if (setterPct > 0) {
+    cobradoComoSetter = ingresos.filter(r => r.setter === m.nombre).reduce((s,r) => s+r.monto, 0);
+    comSetter = cobradoComoSetter * (setterPct/100);
+    if (comSetter > 0) {
+      // El restante suma su setter afuera; el resto lo suma acá.
+      if (m.tipo !== 'restante') comision += comSetter;
+      base = base ? `${base} + ${setterPct}% como setter` : `${setterPct}% como setter`;
+      const setterBaseVal = `setter ${fmt(cobradoComoSetter)}`;
+      baseVal = baseVal ? `${baseVal} · ${setterBaseVal}` : setterBaseVal;
+    }
+  }
+  return { comision, base, baseVal, comSetter, cobradoComoSetter, setterPct };
 }
 
 // Suma lo ya pagado a un miembro en un período (mes/anio)
@@ -2717,7 +2763,8 @@ function renderComisionesEquipo() {
     distribuido += r.comision;
   });
   activos.filter(m => m.tipo === 'restante').forEach(m => {
-    calc[m.id] = { comision: Math.max(0, ctx.revenue - distribuido), base:'Restante del revenue', baseVal:`${fmt(ctx.revenue)} - comisiones` };
+    const rSet = calcComisionMiembro(m, mes, anio, ctx);
+    calc[m.id] = { comision: Math.max(0, ctx.revenue - distribuido) + (rSet.comSetter||0), base: rSet.base || 'Restante del revenue', baseVal: rSet.baseVal || `${fmt(ctx.revenue)} - comisiones` };
   });
 
   // Lista de meses con datos (para acumulado histórico)
@@ -2735,7 +2782,7 @@ function renderComisionesEquipo() {
       const ct = totalesPeriodo(p.mes, p.anio);
       let dist = 0;
       activos.filter(x => x.tipo !== 'restante').forEach(x => { dist += calcComisionMiembro(x, p.mes, p.anio, ct).comision; });
-      if (m.tipo === 'restante') totalGanadoHist += Math.max(0, ct.revenue - dist);
+      if (m.tipo === 'restante') totalGanadoHist += Math.max(0, ct.revenue - dist) + (calcComisionMiembro(m, p.mes, p.anio, ct).comSetter||0);
       else totalGanadoHist += calcComisionMiembro(m, p.mes, p.anio, ct).comision;
     });
     const totalPagadoHist = (CACHE.pagosEquipo||[]).filter(p => p.miembroId === m.id).reduce((s,p)=>s+(parseFloat(p.monto)||0),0);
@@ -2783,10 +2830,16 @@ function renderComisionesEquipo() {
         <span style="color:var(--muted)">${lbl}</span>
         <span style="font-weight:500">${val}</span>
       </div>`).join('');
+    const setterExplHTML = (c.comSetter > 0) ? `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">
+        <div style="font-size:13px;margin-bottom:6px;color:var(--purple)">+ Comisión como setter (${c.setterPct}%)</div>
+        <div style="display:flex;justify-content:space-between;padding:3px 0;font-size:12px"><span style="color:var(--muted)">Cobrado de ventas donde seteó</span><span style="font-weight:500">${fmt(c.cobradoComoSetter)}</span></div>
+        <div style="display:flex;justify-content:space-between;padding:3px 0;font-size:12px"><span style="color:var(--muted)">Comisión setter</span><span style="font-weight:500">${fmt(c.cobradoComoSetter)} × ${c.setterPct}% = ${fmt(c.comSetter)}</span></div>
+      </div>` : '';
     const explHTML = `<div style="margin-top:14px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px">
       <div style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px">📐 Cómo se calcula</div>
       <div style="font-size:13px;margin-bottom:8px">${expl.titulo}</div>
       ${explPasos}
+      ${setterExplHTML}
     </div>`;
     const btnPago = (mes && anio)
       ? `<button class="btn-mini" onclick="abrirPagoEquipo('${m.id}','${(m.nombre||'').replace(/'/g,"\\'")}','${mes}','${anio}',${comisionMes.toFixed(2)})">+ Registrar pago</button>`
@@ -3413,6 +3466,7 @@ async function saveVenta() {
   const email      = document.getElementById('v-email').value.trim();
   const fecha      = document.getElementById('v-fecha').value;
   const vendedor   = document.getElementById('v-vendedor').value;
+  const setter     = document.getElementById('v-setter').value;
   const producto   = document.getElementById('v-producto').value.trim();
   const total      = parseFloat(document.getElementById('v-total').value) || 0;
   const adelanto   = parseFloat(document.getElementById('v-adelanto').value) || 0;
@@ -3511,7 +3565,7 @@ async function saveVenta() {
 
     ventas[idx] = {
       ...v,
-      cliente, telefono, email, fecha, vendedor, producto,
+      cliente, telefono, email, fecha, vendedor, setter, producto,
       metodoPago: metodoPagoE, total, adelanto, saldo: saldoE,
       nCuotas, cuotas: nuevasCuotas, notas,
       comTipo, comValor,
@@ -3558,7 +3612,7 @@ async function saveVenta() {
 
   const ventaObj = {
     id: 'V' + Date.now(),
-    cliente, telefono, email, fecha, vendedor, producto,
+    cliente, telefono, email, fecha, vendedor, setter, producto,
     metodoPago, total, adelanto, saldo, nCuotas, cuotas, notas,
     comTipo, comValor,
     esVenta: true
@@ -3567,10 +3621,10 @@ async function saveVenta() {
   try {
     // El ingreso del adelanto va al sheet
     if (adelanto > 0) {
-      const res = await api({ action:'addIngreso', nombre:cliente, fecha, concepto:`Adelanto - ${producto}`, monto:adelanto, vendedor, esVenta:true });
+      const res = await api({ action:'addIngreso', nombre:cliente, fecha, concepto:`Adelanto - ${producto}`, monto:adelanto, vendedor, setter, esVenta:true });
       if (res.ok) {
         const d = parseFechaLocal(fecha);
-        CACHE.ingresos.unshift({ id:res.id, fecha, nombre:cliente, concepto:`Adelanto - ${producto}`, monto:adelanto, vendedor, esVenta:true, mes:d.mes, anio:d.anio });
+        CACHE.ingresos.unshift({ id:res.id, fecha, nombre:cliente, concepto:`Adelanto - ${producto}`, monto:adelanto, vendedor, setter, esVenta:true, mes:d.mes, anio:d.anio });
         
         // Comisión de pasarela sobre el adelanto
         const comAdelanto = calcComisionPasarela(adelanto, comTipo, comValor);
@@ -3618,6 +3672,7 @@ function resetVentaModal() {
   document.getElementById('v-edit-id').value = '';
   document.getElementById('v-cuotas').value = '1';
   const selV = document.getElementById('v-vendedor'); if (selV) selV.value = '';
+  const selS = document.getElementById('v-setter'); if (selS) selS.value = '';
   const selC = document.getElementById('v-metodo-pago'); if (selC) selC.value = '';
   document.getElementById('v-modal-title').textContent = 'Nueva Venta';
   document.getElementById('v-modal-sub').textContent = 'Registrá la venta y el plan de cobro';
@@ -3736,6 +3791,10 @@ function editVentaCompleta(ventaId) {
   const selVend = document.getElementById('v-vendedor');
   if (selVend) selVend.value = v.vendedor || '';
 
+  // Setter
+  const selSet = document.getElementById('v-setter');
+  if (selSet) selSet.value = v.setter || '';
+
   // Cuenta de cobro: intentar matchear por nombre guardado
   const selCta = document.getElementById('v-metodo-pago');
   if (selCta) {
@@ -3811,6 +3870,8 @@ function editIngreso(id) {
   setTimeout(() => {
     const sel = document.getElementById('ei-vendedor');
     if (sel) { sel.value = r.vendedor || ''; }
+    const selS = document.getElementById('ei-setter');
+    if (selS) { selS.value = r.setter || ''; }
   }, 50);
   openModal('edit-ingreso');
 }
@@ -3820,6 +3881,7 @@ async function updateIngreso() {
   const nombre   = document.getElementById('ei-nombre').value.trim();
   const fecha    = document.getElementById('ei-fecha').value;
   const vendedor = document.getElementById('ei-vendedor').value;
+  const setter   = document.getElementById('ei-setter').value;
   const concepto = document.getElementById('ei-concepto').value.trim();
   const monto    = parseFloat(document.getElementById('ei-monto').value);
   const email    = document.getElementById('ei-email').value.trim();
@@ -3828,11 +3890,11 @@ async function updateIngreso() {
   const metodoPago = document.getElementById('ei-metodo').value;
   if (!nombre || !monto) { showToast('Completá nombre y monto','err'); return; }
   try {
-    const res = await api({ action:'updateIngreso', id, nombre, fecha, concepto, monto, vendedor });
+    const res = await api({ action:'updateIngreso', id, nombre, fecha, concepto, monto, vendedor, setter });
     if (res.ok) {
       const d = parseFechaLocal(fecha);
       const idx = CACHE.ingresos.findIndex(x => x.id === id);
-      if (idx >= 0) CACHE.ingresos[idx] = { ...CACHE.ingresos[idx], nombre, fecha, concepto, monto, vendedor, email, telefono, notas, metodoPago, mes:d.mes, anio:d.anio };
+      if (idx >= 0) CACHE.ingresos[idx] = { ...CACHE.ingresos[idx], nombre, fecha, concepto, monto, vendedor, setter, email, telefono, notas, metodoPago, mes:d.mes, anio:d.anio };
       showToast('Actualizado ✓','ok');
       closeModal('edit-ingreso');
       renderIngresosFromCache();
@@ -4107,7 +4169,7 @@ function abrirModalCobro(ventaId, cuotaIdx) {
   openModal('cobro');
 }
 
-function confirmarCobro() {
+async function confirmarCobro() {
   const ventaId  = document.getElementById('cobro-venta-id').value;
   const cuotaIdx = parseInt(document.getElementById('cobro-cuota-idx').value);
   const monto    = parseFloat(document.getElementById('cobro-monto').value);
@@ -4141,12 +4203,13 @@ function confirmarCobro() {
     ventas[ventaIdx] = v;
     persistVentas(ventas, v);
     
-    // Registrar como ingreso en el Sheet
-    api({ action:'addIngreso', nombre:v.cliente, fecha, concepto:`Saldo pendiente - ${v.producto||''} (${metodo})`, monto, vendedor:v.vendedor||'', esVenta:true }).then(async res => {
+    // Registrar como ingreso en el Sheet (esperar respuesta para evitar duplicados)
+    try {
+      const res = await api({ action:'addIngreso', nombre:v.cliente, fecha, concepto:`Saldo pendiente - ${v.producto||''} (${metodo})`, monto, vendedor:v.vendedor||'', setter:v.setter||'', esVenta:true });
       if (res.ok) {
         const d = parseFechaLocal(fecha);
-        CACHE.ingresos.unshift({ id:res.id, fecha, nombre:v.cliente, concepto:`Saldo pendiente - ${v.producto||''} (${metodo})`, monto, vendedor:v.vendedor||'', esVenta:true, mes:d.mes, anio:d.anio });
-        
+        CACHE.ingresos.unshift({ id:res.id, fecha, nombre:v.cliente, concepto:`Saldo pendiente - ${v.producto||''} (${metodo})`, monto, vendedor:v.vendedor||'', setter:v.setter||'', esVenta:true, mes:d.mes, anio:d.anio });
+
         // Comisión de pasarela sobre el saldo cobrado
         const comSaldo = calcComisionPasarela(monto, v.comTipo, v.comValor);
 
@@ -4172,7 +4235,10 @@ function confirmarCobro() {
         renderDashboardFromCache();
         renderCuotas();
       }
-    });
+    } catch(e) {
+      console.error('Error registrando saldo:', e);
+      showToast('Error al registrar el cobro','err');
+    }
     closeModal('cobro');
     showToast(`Saldo de ${fmt(monto)} agregado como nueva cuota ✓${cuentaId?' → '+getCuentas().find(ct=>ct.id===cuentaId)?.nombre:''}`, 'ok');
     return;
@@ -4227,11 +4293,12 @@ function confirmarCobro() {
     persistVentas(ventas, v);
   }
 
-  // Registrar en Sheet
-  api({ action:'addIngreso', nombre:v.cliente, fecha, concepto:`Cuota ${c.num}/${v.nCuotas} - ${v.producto||''} (${metodo})`, monto, vendedor:v.vendedor||'', esVenta:true }).then(async res => {
+  // Registrar en Sheet (esperar respuesta para evitar duplicados)
+  try {
+    const res = await api({ action:'addIngreso', nombre:v.cliente, fecha, concepto:`Cuota ${c.num}/${v.nCuotas} - ${v.producto||''} (${metodo})`, monto, vendedor:v.vendedor||'', setter:v.setter||'', esVenta:true });
     if (res.ok) {
       const d = parseFechaLocal(fecha);
-      CACHE.ingresos.unshift({ id:res.id, fecha, nombre:v.cliente, concepto:`Cuota ${c.num}/${v.nCuotas} - ${v.producto||''} (${metodo})`, monto, vendedor:v.vendedor||'', esVenta:true, mes:d.mes, anio:d.anio });
+      CACHE.ingresos.unshift({ id:res.id, fecha, nombre:v.cliente, concepto:`Cuota ${c.num}/${v.nCuotas} - ${v.producto||''} (${metodo})`, monto, vendedor:v.vendedor||'', setter:v.setter||'', esVenta:true, mes:d.mes, anio:d.anio });
       c.ingresoId = res.id;
       persistVentas(ventas, v);
       // Comisión de pasarela como gasto
@@ -4240,7 +4307,10 @@ function confirmarCobro() {
       renderGastosFromCache();
       renderDashboardFromCache();
     }
-  });
+  } catch(e) {
+    console.error('Error registrando cuota:', e);
+    showToast('Error al registrar el cobro','err');
+  }
 
   closeModal('cobro');
 
@@ -4519,6 +4589,7 @@ function renderEquipo() {
       <div class="miembro-rol">${m.rol} <span class="tag ${tipoBadge[m.tipo]||'tag-gray'}" style="margin-left:4px;font-size:9px">${tipoLabel[m.tipo]||''}</span></div>
       <div class="miembro-val" style="color:${colors[i%colors.length]};margin-top:10px">${valLabel}</div>
       <div class="miembro-tipo">${subLabel}</div>
+      ${Number(m.setterPct) > 0 ? `<div class="miembro-tipo" style="color:var(--purple);margin-top:4px">+ ${m.setterPct}% como setter</div>` : ''}
     </div>`;
   }).join('');
 
@@ -4532,15 +4603,16 @@ async function saveMiembro() {
   const rol    = document.getElementById('mie-rol').value.trim();
   const tipo   = document.getElementById('mie-tipo').value;
   const valor  = tipo === 'restante' ? 0 : parseFloat(document.getElementById('mie-valor').value);
+  const setterPct = parseFloat(document.getElementById('mie-setter-pct').value) || 0;
   if (!nombre) { showToast('Completá el nombre','err'); return; }
   if (tipo !== 'restante' && !valor) { showToast('Completá el valor','err'); return; }
   try {
-    const res = await api({ action:'addMiembro', nombre, rol, tipo, valor, activo:true });
+    const res = await api({ action:'addMiembro', nombre, rol, tipo, valor, setterPct, activo:true });
     if (res.ok) {
-      CACHE.equipo.push({ id:res.id, nombre, rol, tipo, valor, activo:true });
+      CACHE.equipo.push({ id:res.id, nombre, rol, tipo, valor, setterPct, activo:true });
       showToast('Miembro agregado ✓','ok');
       closeModal('miembro');
-      clearForm(['mie-nombre','mie-rol','mie-valor']);
+      clearForm(['mie-nombre','mie-rol','mie-valor','mie-setter-pct']);
       renderEquipo();
       renderDashboardFromCache();
       fillVendedorSelects();
@@ -4556,6 +4628,7 @@ function editMiembro(id) {
   document.getElementById('em-rol').value   = m.rol;
   document.getElementById('em-tipo').value  = m.tipo;
   document.getElementById('em-valor').value = m.valor;
+  document.getElementById('em-setter-pct').value = m.setterPct || '';
   toggleTipoMiembro('em');
   openModal('edit-miembro');
 }
@@ -4566,12 +4639,13 @@ async function updateMiembro() {
   const rol    = document.getElementById('em-rol').value.trim();
   const tipo   = document.getElementById('em-tipo').value;
   const valor  = tipo === 'restante' ? 0 : parseFloat(document.getElementById('em-valor').value);
+  const setterPct = parseFloat(document.getElementById('em-setter-pct').value) || 0;
   if (!nombre) { showToast('Completá el nombre','err'); return; }
   try {
-    const res = await api({ action:'updateMiembro', id, nombre, rol, tipo, valor, activo:true });
+    const res = await api({ action:'updateMiembro', id, nombre, rol, tipo, valor, setterPct, activo:true });
     if (res.ok) {
       const idx = CACHE.equipo.findIndex(x => x.id === id);
-      if (idx >= 0) CACHE.equipo[idx] = { ...CACHE.equipo[idx], nombre, rol, tipo, valor };
+      if (idx >= 0) CACHE.equipo[idx] = { ...CACHE.equipo[idx], nombre, rol, tipo, valor, setterPct };
       showToast('Actualizado ✓','ok');
       closeModal('edit-miembro');
       renderEquipo();
