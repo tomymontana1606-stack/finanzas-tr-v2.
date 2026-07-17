@@ -2474,7 +2474,7 @@ function generateSparklineData(records, mes, anio) {
   return months.map(m => {
     return records
       .filter(r => r.mes === m.mes && String(r.anio) === String(m.anio))
-      .reduce((sum, r) => sum + r.monto, 0);
+      .reduce((sum, r) => sum + (r.monto||0), 0);
   });
 }
 
@@ -2595,7 +2595,7 @@ function calcComisionMiembro(m, mes, anio, ctx) {
     comision = Math.max(0, revenue) * (m.valor/100);
     base = `${m.valor}% del revenue neto`; baseVal = fmt(Math.max(0, revenue));
   } else if (m.tipo === 'vendedor') {
-    const susVentas = ingresos.filter(r => r.vendedor === m.nombre).reduce((s,r) => s+r.monto, 0);
+    const susVentas = ingresos.filter(r => r.vendedor === m.nombre).reduce((s,r) => s+(r.monto||0), 0);
     comision = susVentas * (m.valor/100);
     base = `${m.valor}% sobre lo cobrado de sus ventas`; baseVal = fmt(susVentas);
   } else if (m.tipo === 'vendedor_total') {
@@ -2618,7 +2618,7 @@ function calcComisionMiembro(m, mes, anio, ctx) {
   const setterPct = Number(m.setterPct) || 0;
   let comSetter = 0, cobradoComoSetter = 0;
   if (setterPct > 0) {
-    cobradoComoSetter = ingresos.filter(r => r.setter === m.nombre).reduce((s,r) => s+r.monto, 0);
+    cobradoComoSetter = ingresos.filter(r => r.setter === m.nombre).reduce((s,r) => s+(r.monto||0), 0);
     comSetter = cobradoComoSetter * (setterPct/100);
     if (comSetter > 0) {
       // El restante suma su setter afuera; el resto lo suma acá.
@@ -2697,7 +2697,7 @@ function explicarComision(m, mes, anio, ctx) {
       pasos
     };
   } else if (m.tipo === 'vendedor') {
-    const susVentas = ingresos.filter(r => r.vendedor === m.nombre).reduce((s,r) => s+r.monto, 0);
+    const susVentas = ingresos.filter(r => r.vendedor === m.nombre).reduce((s,r) => s+(r.monto||0), 0);
     return {
       titulo: `${tasaPct}% sobre lo cobrado de las ventas que cerró ${m.nombre}`,
       pasos: [
@@ -2976,10 +2976,16 @@ async function guardarPagoEquipo() {
   const pagoId = 'PE_' + Date.now();
   const pago = { id:pagoId, miembroId, miembroNombre:nombre, mes, anio, monto, cuentaId, fecha, nota };
 
-  // 1) Guardar el pago en el Sheet
+  // 1) Guardar el pago en el Sheet — si falla, NO seguimos (evita pagar dos veces al recargar)
+  let pagoOk = false;
   try {
-    await api({ action:'addPagoEquipo', ...pago });
+    const res = await api({ action:'addPagoEquipo', ...pago });
+    pagoOk = !!(res && res.ok);
   } catch(e) { console.error('addPagoEquipo:', e); }
+  if (!pagoOk) {
+    showToast('⚠ No se pudo registrar el pago en el servidor. No se guardó nada, reintentá.','err');
+    return;
+  }
   CACHE.pagosEquipo = CACHE.pagosEquipo || [];
   CACHE.pagosEquipo.push(pago);
 
@@ -3011,8 +3017,16 @@ async function eliminarPagoEquipo(pagoId) {
   if (!confirm('¿Eliminar este pago? Se revierte también la salida de tesorería.')) return;
   const pago = (CACHE.pagosEquipo || []).find(p => p.id === pagoId);
   if (!pago) return;
-  // Borrar pago
-  try { await api({ action:'deletePagoEquipo', id:pagoId }); } catch(e){}
+  // Borrar pago — si el servidor no lo pudo borrar, no lo sacamos del CACHE (si no reaparece al recargar)
+  let delOk = false;
+  try {
+    const res = await api({ action:'deletePagoEquipo', id:pagoId });
+    delOk = !!(res && (res.ok || res.error === 'not_found'));
+  } catch(e){ console.error('deletePagoEquipo:', e); }
+  if (!delOk) {
+    showToast('⚠ No se pudo eliminar el pago en el servidor. Recargá y reintentá.','err');
+    return;
+  }
   CACHE.pagosEquipo = CACHE.pagosEquipo.filter(p => p.id !== pagoId);
   // Borrar movimiento asociado
   if (pago.movId) {
@@ -3045,8 +3059,8 @@ function renderDashboardFromCache() {
     gastos   = gastos.filter(r => r.mes == mes && String(r.anio) == String(anio));
   }
 
-  const totalIngresos = ingresos.reduce((s,r) => s + r.monto, 0);
-  const gastosDirectos = gastos.reduce((s,r) => s + r.monto, 0);
+  const totalIngresos = ingresos.reduce((s,r) => s + (r.monto||0), 0);
+  const gastosDirectos = gastos.reduce((s,r) => s + (r.monto||0), 0);
 
   // Sumar suscripciones al total de gastos (mismo criterio que totalesPeriodo)
   const gastoSubs = calcGastoSubs(mes, anio);
@@ -3114,7 +3128,7 @@ function renderDashboardFromCache() {
   }
 
   const porCat = {};
-  gastos.forEach(g => { porCat[g.categoria] = (porCat[g.categoria]||0) + g.monto; });
+  gastos.forEach(g => { porCat[g.categoria] = (porCat[g.categoria]||0) + (g.monto||0); });
 
   // Sumar suscripciones: SOLO en "Suscripciones" (sin duplicar por categoría)
   const subs = (CACHE.subs || JSON.parse(localStorage.getItem('dash_subs') || '[]'));
@@ -3169,7 +3183,7 @@ function renderAlertas() {
   });
 
   if (vencidas.length > 0) {
-    const totalVencido = vencidas.reduce((s,c) => s + c.monto, 0);
+    const totalVencido = vencidas.reduce((s,c) => s + (c.monto||0), 0);
     alertas.push({
       tipo: 'urgente', icono: '🔴',
       titulo: `${vencidas.length} cuota${vencidas.length>1?'s':''} vencida${vencidas.length>1?'s':''} sin cobrar`,
@@ -3179,7 +3193,7 @@ function renderAlertas() {
   }
 
   if (proximas7.length > 0) {
-    const total7 = proximas7.reduce((s,c) => s + c.monto, 0);
+    const total7 = proximas7.reduce((s,c) => s + (c.monto||0), 0);
     alertas.push({
       tipo: 'warning', icono: '⏰',
       titulo: `${proximas7.length} cuota${proximas7.length>1?'s':''} vence${proximas7.length===1?'':'n'} esta semana`,
@@ -3189,7 +3203,7 @@ function renderAlertas() {
   }
 
   if (proximas30.length > 0) {
-    const total30 = proximas30.reduce((s,c) => s + c.monto, 0);
+    const total30 = proximas30.reduce((s,c) => s + (c.monto||0), 0);
     alertas.push({
       tipo: 'info', icono: '📅',
       titulo: `${proximas30.length} cuota${proximas30.length>1?'s':''} próxima${proximas30.length>1?'s':''} dentro de 30 días`,
@@ -3347,7 +3361,7 @@ function renderChartDonut() {
   const mesActual = hoy.getMonth(), anioActual = hoy.getFullYear();
 
   ventas.forEach(v => {
-    const cobradoEnCuotas = (v.cuotas||[]).filter(c=>c.pagada).reduce((s,c)=>s+(c.montoCobrado||c.monto),0);
+    const cobradoEnCuotas = (v.cuotas||[]).filter(c=>c.pagada).reduce((s,c)=>s+(c.montoCobrado||c.monto||0),0);
     const saldoReal = Math.max(0, v.total - (v.adelanto||0) - cobradoEnCuotas);
     total += saldoReal;
 
@@ -3499,7 +3513,7 @@ async function saveVenta() {
 
     // Reconstruir cuotas: conservar las pagadas, regenerar las pendientes
     const cuotasPagadas = (v.cuotas || []).filter(c => c.pagada);
-    const cobradoPagadas = cuotasPagadas.reduce((s,c)=>s+(c.montoCobrado||c.monto),0);
+    const cobradoPagadas = cuotasPagadas.reduce((s,c)=>s+(c.montoCobrado||c.monto||0),0);
     const saldoPendiente = Math.max(0, total - adelanto - cobradoPagadas);
     const pendientesCount = Math.max(0, nCuotas - cuotasPagadas.length);
     const porCuotaE = pendientesCount > 0 ? saldoPendiente / pendientesCount : 0;
@@ -4045,10 +4059,10 @@ function renderCuotas() {
   }
   const html = ventas.map(v => {
     const pendientes = v.cuotas.filter(c => !c.pagada);
-    const cobradoEnCuotas = v.cuotas.filter(c => c.pagada).reduce((s,c) => s + (c.montoCobrado||c.monto), 0);
+    const cobradoEnCuotas = v.cuotas.filter(c => c.pagada).reduce((s,c) => s + (c.montoCobrado||c.monto||0), 0);
     const saldoReal = Math.max(0, v.total - (v.adelanto||0) - cobradoEnCuotas);
     const subtotal = pendientes.length > 0
-      ? pendientes.reduce((s,c) => s + c.monto, 0)
+      ? pendientes.reduce((s,c) => s + (c.monto||0), 0)
       : saldoReal;
     totalPorCobrar += subtotal;
     const porcentaje = saldoReal === 0 ? 100 : v.nCuotas > 0 ? Math.round(((v.nCuotas - pendientes.length) / v.nCuotas) * 100) : 100;
@@ -4098,7 +4112,7 @@ function renderCuotas() {
           <div style="display:flex;gap:8px;align-items:center">
             <span class="tag tag-gold">${fmt(v.total)}</span>
             ${(() => {
-              const cobradoEnCuotas = v.cuotas.filter(c => c.pagada).reduce((s,c) => s + (c.montoCobrado||c.monto), 0);
+              const cobradoEnCuotas = v.cuotas.filter(c => c.pagada).reduce((s,c) => s + (c.montoCobrado||c.monto||0), 0);
               const saldoReal = Math.max(0, v.total - (v.adelanto||0) - cobradoEnCuotas);
               return saldoReal > 0 ? `<button class="btn-icon" onclick="pagarSaldo('${v.id}')" title="Pagar saldo pendiente" style="color:var(--red);border-color:rgba(231,76,60,0.4);padding:6px 12px;width:auto;font-size:11px;font-weight:600">Pagar $${Math.round(saldoReal)}</button>` : '';
             })()}
@@ -4149,7 +4163,7 @@ function abrirModalCobro(ventaId, cuotaIdx) {
   document.getElementById('cobro-notas').value = '';
 
   // Show total pending info
-  const totalPendiente = v.cuotas.filter((q,i) => !q.pagada).reduce((s,q) => s + q.monto, 0);
+  const totalPendiente = v.cuotas.filter((q,i) => !q.pagada).reduce((s,q) => s + (q.monto||0), 0);
   const hint = document.querySelector('#modal-cobro .form-hint');
   if (hint) hint.textContent = `Monto sugerido: ${fmt(c.monto)} · Saldo total pendiente: ${fmt(totalPendiente)} · Si cambiás el monto, la diferencia se ajusta en la siguiente cuota`;
 
@@ -4208,9 +4222,11 @@ async function confirmarCobro() {
     persistVentas(ventas, v);
     
     // Registrar como ingreso en el Sheet (esperar respuesta para evitar duplicados)
+    let okSheetSaldo = false;
     try {
       const res = await api({ action:'addIngreso', nombre:v.cliente, fecha, concepto:`Saldo pendiente - ${v.producto||''} (${metodo})`, monto, vendedor:v.vendedor||'', setter:v.setter||'', esVenta:true });
       if (res.ok) {
+        okSheetSaldo = true;
         const d = parseFechaLocal(fecha);
         CACHE.ingresos.unshift({ id:res.id, fecha, nombre:v.cliente, concepto:`Saldo pendiente - ${v.producto||''} (${metodo})`, monto, vendedor:v.vendedor||'', setter:v.setter||'', esVenta:true, mes:d.mes, anio:d.anio });
 
@@ -4244,7 +4260,11 @@ async function confirmarCobro() {
       showToast('Error al registrar el cobro','err');
     }
     closeModal('cobro');
-    showToast(`Saldo de ${fmt(monto)} agregado como nueva cuota ✓${cuentaId?' → '+getCuentas().find(ct=>ct.id===cuentaId)?.nombre:''}`, 'ok');
+    if (okSheetSaldo) {
+      showToast(`Saldo de ${fmt(monto)} agregado como nueva cuota ✓${cuentaId?' → '+getCuentas().find(ct=>ct.id===cuentaId)?.nombre:''}`, 'ok');
+    } else {
+      showToast('⚠ El cobro no se registró en el servidor. Recargá la página y verificá antes de reintentar.','err');
+    }
     return;
   }
   
@@ -4298,9 +4318,11 @@ async function confirmarCobro() {
   }
 
   // Registrar en Sheet (esperar respuesta para evitar duplicados)
+  let okSheetCuota = false;
   try {
     const res = await api({ action:'addIngreso', nombre:v.cliente, fecha, concepto:`Cuota ${c.num}/${v.nCuotas} - ${v.producto||''} (${metodo})`, monto, vendedor:v.vendedor||'', setter:v.setter||'', esVenta:true });
     if (res.ok) {
+      okSheetCuota = true;
       const d = parseFechaLocal(fecha);
       CACHE.ingresos.unshift({ id:res.id, fecha, nombre:v.cliente, concepto:`Cuota ${c.num}/${v.nCuotas} - ${v.producto||''} (${metodo})`, monto, vendedor:v.vendedor||'', setter:v.setter||'', esVenta:true, mes:d.mes, anio:d.anio });
       c.ingresoId = res.id;
@@ -4327,30 +4349,42 @@ async function confirmarCobro() {
       toastMsg += ` · Cuota ${proxIdx+1} ajustada a ${fmt(v.cuotas[proxIdx].monto)}`;
     }
   }
-  showToast(toastMsg, 'ok');
+  if (okSheetCuota) {
+    showToast(toastMsg, 'ok');
+  } else {
+    showToast('⚠ El cobro no se registró en el servidor. Recargá la página y verificá antes de reintentar.','err');
+  }
   renderCuotas();
   if (cuentaId) renderTesoreria();
 }
 
-function deshacerCobro(ventaId, cuotaIdx) {
+async function deshacerCobro(ventaId, cuotaIdx) {
   if (!confirm('¿Deshacer este cobro? Se marcará como pendiente y se eliminará el movimiento de tesorería.')) return;
   const ventas = JSON.parse(localStorage.getItem('dash_ventas') || '[]');
   const v = ventas.find(x => x.id === ventaId);
   if (!v) return;
   const c = v.cuotas[cuotaIdx];
 
-  // Eliminar ingreso del Sheet
+  // Eliminar ingreso del Sheet — si el servidor no lo borró, NO deshacemos (si no queda huérfano y recobrable)
   if (c.ingresoId) {
-    api({ action:'deleteIngreso', id:c.ingresoId }).then(() => {
-      CACHE.ingresos = CACHE.ingresos.filter(r => r.id !== c.ingresoId);
-      renderIngresosFromCache();
-      renderDashboardFromCache();
-    });
+    let delOk = false;
+    try {
+      const res = await api({ action:'deleteIngreso', id:c.ingresoId });
+      delOk = !!(res && (res.ok || res.error === 'not_found'));
+    } catch(e) { console.error('deleteIngreso:', e); }
+    if (!delOk) {
+      showToast('⚠ No se pudo deshacer el cobro en el servidor. Recargá y reintentá.','err');
+      return;
+    }
+    CACHE.ingresos = CACHE.ingresos.filter(r => r.id !== c.ingresoId);
+    renderIngresosFromCache();
+    renderDashboardFromCache();
   }
 
   // Eliminar movimiento de tesorería si existe
   if (c.movId) {
     saveMovsLocal(getMovimientos().filter(m => m.id !== c.movId));
+    CACHE.movimientos = (CACHE.movimientos || []).filter(m => m.id !== c.movId);
     deleteMovimientoSheet(c.movId);
     renderTesoreria();
   }
@@ -4692,9 +4726,9 @@ function generarReciboPDF(ventaId) {
   const fechaEmision = hoy.toLocaleDateString('es-AR', { day:'2-digit', month:'long', year:'numeric' });
   const nRecibo = String(ventaId).replace('V','').slice(-8);
 
-  const cobradoCuotas = v.cuotas.filter(c=>c.pagada).reduce((s,c)=>s+(c.montoCobrado||c.monto),0);
+  const cobradoCuotas = v.cuotas.filter(c=>c.pagada).reduce((s,c)=>s+(c.montoCobrado||c.monto||0),0);
   const cobrado   = cobradoCuotas + (v.adelanto||0);
-  const pendiente = v.cuotas.filter(c=>!c.pagada).reduce((s,c)=>s+c.monto,0);
+  const pendiente = v.cuotas.filter(c=>!c.pagada).reduce((s,c)=>s+(c.monto||0),0);
 
   const cuotasRows = v.cuotas.map(c => {
     const pagada = c.pagada;
@@ -4948,11 +4982,11 @@ function renderTesoreria() {
   const saldos = {};
   cuentas.forEach(c => { saldos[c.id] = parseFloat(c.saldoInicial) || 0; });
   movs.forEach(m => {
-    if (m.tipo === 'entrada')       saldos[m.cuentaId] = (saldos[m.cuentaId]||0) + m.monto;
+    if (m.tipo === 'entrada')       saldos[m.cuentaId] = (saldos[m.cuentaId]||0) + (m.monto||0);
     if (m.tipo === 'salida')        saldos[m.cuentaId] = (saldos[m.cuentaId]||0) - m.monto;
     if (m.tipo === 'transferencia') {
       saldos[m.cuentaId]     = (saldos[m.cuentaId]||0) - m.monto;
-      saldos[m.cuentaDestId] = (saldos[m.cuentaDestId]||0) + m.monto;
+      saldos[m.cuentaDestId] = (saldos[m.cuentaDestId]||0) + (m.monto||0);
     }
   });
 
@@ -5404,7 +5438,7 @@ function pagarSaldo(ventaId) {
     const v = ventas.find(x => x.id === ventaId);
     if (!v) { showToast('Venta no encontrada','err'); return; }
     
-    const cobradoEnCuotas = v.cuotas.filter(c => c.pagada).reduce((s,c) => s + (c.montoCobrado||c.monto), 0);
+    const cobradoEnCuotas = v.cuotas.filter(c => c.pagada).reduce((s,c) => s + (c.montoCobrado||c.monto||0), 0);
     const saldo = Math.max(0, v.total - (v.adelanto||0) - cobradoEnCuotas);
     
     if (saldo <= 0) { showToast('No hay saldo pendiente','ok'); return; }
@@ -5815,8 +5849,8 @@ function renderChartTimelineCustom(startDate, endDate) {
     current.setMonth(current.getMonth() + 1);
   }
 
-  const ingData = meses.map(m => CACHE.ingresos.filter(r => r.mes === m.mes && r.anio === m.anio).reduce((s,r)=>s+r.monto,0));
-  const gasData = meses.map(m => CACHE.gastos.filter(r => r.mes === m.mes && r.anio === m.anio).reduce((s,r)=>s+r.monto,0));
+  const ingData = meses.map(m => CACHE.ingresos.filter(r => r.mes === m.mes && r.anio === m.anio).reduce((s,r)=>s+(r.monto||0),0));
+  const gasData = meses.map(m => CACHE.gastos.filter(r => r.mes === m.mes && r.anio === m.anio).reduce((s,r)=>s+(r.monto||0),0));
   const revData = ingData.map((v,i) => Math.max(0, v - gasData[i]));
   const labels = meses.map(m => m.label);
 
